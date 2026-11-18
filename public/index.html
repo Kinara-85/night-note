@@ -1,0 +1,283 @@
+<!--
+============================================================
+public/index.html — THE WEB APP (presentation tier)
+In the cloud this would be hosted on: Amazon S3 + CloudFront.
+It only talks to the API (fetch "/api/..."), sending the login
+token with every request. It never touches the database.
+============================================================
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Night Note</title>
+    <link rel="icon" type="image/png" href="logo.png" />
+  <style>
+    body { font-family: system-ui, sans-serif; background: #34496b; color: #18181b; margin: 0; }
+    main { max-width: 580px; margin: 0 auto; padding: 24px 16px 48px; }
+       .brand { text-align: center; margin-bottom: 18px; }
+    .logo { width: 170px; max-width: 60%; height: auto; border-radius: 18px; display: block; margin: 0 auto 10px; }
+    .sub { color: #52525b; margin: 0 0 20px; }
+    section { background: #fff; border: 1px solid #e4e4e7; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+    h2 { font-size: 1.05rem; margin: 0 0 10px; }
+    ul { list-style: none; padding: 0; margin: 0 0 10px; }
+    li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f4f4f5; }
+    li span { flex: 1; }
+    li.done span { text-decoration: line-through; color: #a1a1aa; }
+    .empty { color: #a1a1aa; }
+    form, .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+    input { padding: 8px; border: 1px solid #d4d4d8; border-radius: 6px; font: inherit; }
+    input[type="text"], input[type="email"], input[type="password"] { flex: 1; min-width: 0; }
+    button { padding: 8px 12px; border: 0; border-radius: 6px; background: #18181b; color: #fff; cursor: pointer; font: inherit; }
+    button.link { background: none; color: #18181b; text-decoration: underline; padding: 0; }
+    button.small { background: none; color: #b91c1c; padding: 2px 6px; }
+    label { display: flex; flex-direction: column; font-size: 0.85rem; gap: 4px; }
+    .note { border-left: 3px solid #18181b; padding: 6px 10px; margin-bottom: 8px; background: #fafafa; white-space: pre-line; }
+    .muted { color: #52525b; font-size: 0.85rem; }
+    .error { color: #b91c1c; min-height: 1.2em; margin: 6px 0 0; }
+    .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    .wide { flex: 1 1 100%; }
+        /* light text on the dark background (outside the white cards) */
+    .brand .sub { color: #dbe4f0; }
+    p.top.muted, p.top.muted .link { color: #dbe4f0; }
+  </style>
+</head>
+<body>
+<main>
+    <header class="brand">
+    <img src="logo.png" alt="Night Note" class="logo" />
+    <p class="sub">Plan at night. See it first thing in the morning.</p>
+    <p class="sub" id="version">Version 1.0</p>
+  </header>
+
+  <!-- ============ SIGN IN / SIGN UP (Login = Cognito) ============ -->
+  <section id="authView" hidden>
+    <h2 id="authTitle">Sign in</h2>
+    <form id="authForm">
+      <input type="email" id="email" placeholder="Email" required />
+      <input type="password" id="password" placeholder="Password (min 6)" required />
+      <button id="authBtn">Sign in</button>
+    </form>
+    <p class="error" id="authError"></p>
+    <button class="link" id="switchAuth">New here? Create an account</button>
+  </section>
+
+  <!-- ============ MAIN APP ============ -->
+  <div id="appView" hidden>
+    <p class="top muted"><span id="who"></span><button class="link" id="logout">Sign out</button></p>
+
+    <section>
+      <h2>Today <span class="muted" id="todayDate"></span></h2>
+      <ul id="todayList"></ul>
+      <form id="todayForm"><input type="text" id="todayInput" placeholder="Add a task for today" /><button>Add</button></form>
+    </section>
+
+    <section>
+      <h2>Plan for tomorrow <span class="muted" id="tomorrowDate"></span></h2>
+      <ul id="tomorrowList"></ul>
+      <form id="tomorrowForm"><input type="text" id="tomorrowInput" placeholder="Add a task for tomorrow" /><button>Add</button></form>
+    </section>
+
+    <section>
+      <h2>Reminder settings</h2>
+      <form id="settingsForm">
+        <label>Bedtime <input type="time" id="bedtime" required /></label>
+        <label>Morning <input type="time" id="morning" required /></label>
+        <label>Nudge <input type="time" id="nudge" required /></label>
+        <label class="wide">Time zone <input type="text" id="timeZone" placeholder="e.g. Asia/Karachi" required /></label>
+<label class="wide">Phone (device token = your ntfy topic)
+  <span class="row"><input type="password" id="deviceToken" placeholder="e.g. nightnote-faiza-48213" style="flex:1" />
+  <button type="button" id="showToken">Show</button></span>
+</label>        <button>Save settings</button>
+      </form>
+      <p class="muted" id="settingsMsg"></p>
+    </section>
+
+    <section>
+      <h2>Demo: send a reminder now</h2>
+      <p class="muted">Creates a one-time schedule. The reminder side picks it up within a few seconds.</p>
+      <div class="row">
+        <button onclick="sendNow('bedtime')">Bedtime prompt</button>
+        <button onclick="sendNow('morning')">Morning brief</button>
+        <button onclick="sendNow('nudge')">Nudge</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Reminders sent to you</h2>
+      <p class="muted" id="queueStats"></p>
+      <div id="sentList"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+  // ---------- Talking to the API (always with the login token) ----------
+  let token = localStorage.getItem("nightnote-token");
+
+  async function api(method, url, body) {
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + (token || "") },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 401 && token) { signOutLocal(); throw new Error("Please sign in again"); }
+    if (res.status === 204) return null;
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Request failed");
+    return data;
+  }
+
+  // ---------- Sign in / sign up ----------
+  let mode = "signin";
+  const $ = (id) => document.getElementById(id);
+
+  $("switchAuth").onclick = () => {
+    mode = mode === "signin" ? "signup" : "signin";
+    $("authTitle").textContent = mode === "signin" ? "Sign in" : "Create an account";
+    $("authBtn").textContent = mode === "signin" ? "Sign in" : "Sign up";
+    $("switchAuth").textContent = mode === "signin" ? "New here? Create an account" : "Have an account? Sign in";
+    $("authError").textContent = "";
+  };
+
+  $("authForm").onsubmit = async (e) => {
+    e.preventDefault();
+    $("authError").textContent = "";
+    try {
+      const body = { email: $("email").value, password: $("password").value };
+      if (mode === "signup") body.timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const data = await api("POST", mode === "signin" ? "/api/login" : "/api/signup", body);
+      token = data.token;
+      localStorage.setItem("nightnote-token", token);
+      showApp();
+    } catch (err) {
+      $("authError").textContent = err.message;
+    }
+  };
+
+  function signOutLocal() {
+    token = null;
+    localStorage.removeItem("nightnote-token");
+    $("appView").hidden = true;
+    $("authView").hidden = false;
+  }
+
+  $("logout").onclick = async () => {
+    try { await api("POST", "/api/logout"); } catch {}
+    signOutLocal();
+  };
+
+  // ---------- Tasks ----------
+  function renderList(listId, tasks) {
+    const ul = $(listId);
+    ul.innerHTML = "";
+    if (tasks.length === 0) { ul.innerHTML = '<li class="empty">No tasks yet.</li>'; return; }
+    for (const t of tasks) {
+      const li = document.createElement("li");
+      if (t.done) li.className = "done";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = t.done;
+      box.onchange = async () => { await api("PATCH", `/api/tasks/${t.id}/toggle`); loadTasks(); };
+      const text = document.createElement("span");
+      text.textContent = t.text;
+      const del = document.createElement("button");
+      del.className = "small";
+      del.textContent = "Delete";
+      del.onclick = async () => { await api("DELETE", `/api/tasks/${t.id}`); loadTasks(); };
+      li.append(box, text, del);
+      ul.append(li);
+    }
+  }
+
+  async function loadTasks() {
+    const today = await api("GET", "/api/tasks?day=today");
+    const tomorrow = await api("GET", "/api/tasks?day=tomorrow");
+    $("todayDate").textContent = today.date;
+    $("tomorrowDate").textContent = tomorrow.date;
+    renderList("todayList", today.tasks);
+    renderList("tomorrowList", tomorrow.tasks);
+  }
+
+  function setupForm(formId, inputId, day) {
+    $(formId).onsubmit = async (e) => {
+      e.preventDefault();
+      const input = $(inputId);
+      if (!input.value.trim()) return;
+      await api("POST", "/api/tasks", { text: input.value, day });
+      input.value = "";
+      loadTasks();
+    };
+  }
+  setupForm("todayForm", "todayInput", "today");
+  setupForm("tomorrowForm", "tomorrowInput", "tomorrow");
+
+  // ---------- Settings (saving also updates the schedule) ----------
+  async function loadSettings() {
+    const s = await api("GET", "/api/settings");
+    $("who").textContent = "Signed in as " + s.email;
+    $("bedtime").value = s.times.bedtime;
+    $("morning").value = s.times.morning;
+    $("nudge").value = s.times.nudge;
+    $("timeZone").value = s.timeZone;
+    $("deviceToken").value = s.deviceToken;
+  }
+
+  $("settingsForm").onsubmit = async (e) => {
+    e.preventDefault();
+    $("settingsMsg").textContent = "";
+    try {
+      await api("PUT", "/api/settings", {
+        times: { bedtime: $("bedtime").value, morning: $("morning").value, nudge: $("nudge").value },
+        timeZone: $("timeZone").value.trim(),
+        deviceToken: $("deviceToken").value.trim(),
+      });
+      $("settingsMsg").textContent = "Saved. Your reminder schedule is updated.";
+      loadTasks();
+    } catch (err) {
+      $("settingsMsg").textContent = err.message;
+    }
+  };
+  // Show / hide the device token
+  $("showToken").onclick = () => {
+    const box = $("deviceToken");
+    box.type = box.type === "password" ? "text" : "password";
+    $("showToken").textContent = box.type === "password" ? "Show" : "Hide";
+  };
+  // ---------- Demo ----------
+  async function sendNow(type) {
+    try { await api("POST", `/api/demo/${type}`); } catch (err) { alert(err.message); }
+  }
+
+  // ---------- Reminders sent + queue status ----------
+  async function loadReminders() {
+    if (!token) return;
+    try {
+      const data = await api("GET", "/api/reminders");
+      $("queueStats").textContent = `Queue: ${data.queue} waiting · Dead Letter Queue: ${data.dlq}`;
+      const box = $("sentList");
+      box.innerHTML = data.sent.length ? "" : '<p class="empty">None yet.</p>';
+      for (const n of data.sent) {
+        const div = document.createElement("div");
+        div.className = "note";
+        div.textContent = `${new Date(n.sentAt).toLocaleTimeString()} · ${n.title}\n${n.text}`;
+        box.append(div);
+      }
+    } catch {}
+  }
+
+  // ---------- Start ----------
+  async function showApp() {
+    $("authView").hidden = true;
+    $("appView").hidden = false;
+    await loadSettings();
+    await loadTasks();
+    loadReminders();
+  }
+
+  if (token) showApp().catch(signOutLocal); else $("authView").hidden = false;
+  setInterval(loadReminders, 3000);
+</script>
+</body>
+</html>

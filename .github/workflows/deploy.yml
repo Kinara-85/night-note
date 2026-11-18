@@ -1,0 +1,90 @@
+# ============================================================
+# CI/CD PIPELINE for Night Note
+# Code change -> Git push -> Security scan + Unit tests -> Build
+#   -> Artifact in AWS S3 -> Deploy to EC2 -> Verify live app
+# Runs automatically on every push to the main branch.
+# ============================================================
+
+name: Night Note CI/CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # also lets you run it by hand from the Actions tab
+
+permissions:
+  contents: read
+  security-events: write # needed by CodeQL to show its results
+
+jobs:
+  # ---------- 1. Unit tests (the pipeline fails here if a test fails) ----------
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test
+
+  # ---------- BONUS: DevSecOps security checks ----------
+  security:
+    name: Security scan (CodeQL + npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+      - uses: github/codeql-action/analyze@v3
+      - name: Dependency vulnerability scan
+        run: npm audit --audit-level=high
+
+  # ---------- 2. Build + 3. Upload artifact to S3 + 4. Deploy to EC2 ----------
+  build-and-deploy:
+    name: Build, upload to S3, deploy to EC2
+    needs: [test, security] # only runs if tests AND security passed
+    runs-on: ubuntu-latest
+    env:
+      BUILD_NAME: build-v1.0.${{ github.run_number }}.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build (install packages and zip the app)
+        run: |
+          npm ci --omit=dev
+          zip -r "$BUILD_NAME" api reminders shared public scripts \
+            config.js start.js package.json package-lock.json node_modules
+          ls -lh "$BUILD_NAME"
+
+      - name: Log in to AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Upload build to S3
+        run: aws s3 cp "$BUILD_NAME" "s3://${{ secrets.S3_BUCKET }}/builds/$BUILD_NAME"
+
+      - name: Deploy latest build from S3 to EC2
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+        run: |
+          echo "$SSH_KEY" > key.pem
+          chmod 600 key.pem
+          ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@"$EC2_HOST" \
+            "bash ~/deploy.sh $S3_BUCKET builds/$BUILD_NAME"
+          rm key.pem
+
+      - name: Verify production (check the live app)
+        run: |
+          sleep 5
+          curl -sf "http://${{ secrets.EC2_HOST }}:3000" | grep -o 'Version [0-9.]*'

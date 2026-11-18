@@ -1,0 +1,15 @@
+{
+  "name": "night-note",
+  "version": "2.0.0",
+  "description": "Plan at night, see it first thing in the morning. 3-tier + event-driven prototype.",
+  "scripts": {
+    "start": "node start.js",
+    "test": "node --test",
+    "api": "node api/server.js",
+    "reminders": "node reminders/service.js",
+    "redrive": "node scripts/redrive.js"
+  },
+  "dependencies": {
+    "express": "4.22.3"
+  }
+}
